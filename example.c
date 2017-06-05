@@ -26,6 +26,7 @@ struct arguments {
     char *almanac;
     int verbose;
     int factory;
+    int force;
 };
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state)
