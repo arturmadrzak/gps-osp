@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <argp.h>
+#include <signal.h>
 #include "driver/driver.h"
 #include "driver/serial-io.h"
 #include "osp.h"
+
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state);
 
@@ -72,6 +74,13 @@ static void force_osp(io_t *serial, char *dev)
     !err ? printf("> |%s|", cmd) : printf("error: %s\n", strerror(errno));
 }
 
+static int terminate = 0;
+
+static void sig_handler(int signum)
+{
+    terminate = 1;
+}
+
 int main(int argc, char* argv[])
 {
     struct arguments arguments;
@@ -82,6 +91,8 @@ int main(int argc, char* argv[])
     arguments.factory = 0;
     arguments.force = 0;
     arguments.verbose = 0;
+
+    signal(SIGINT, sig_handler);
 
     argp_parse(&argp, argc, argv, 0, NULL, &arguments);
     printf("device: %s\nverbose: %d\n", arguments.device,
@@ -98,11 +109,11 @@ int main(int argc, char* argv[])
     serial_config(serial, arguments.device, 115200);
 
     osp_start(osp);
-    for(;;) {
+    for(;!terminate;) {
         /* cmnd prompt */ 
         sleep(1);
     }
-
+    osp_stop(osp);
     free(osp);
     free(transport);
     free(serial);
