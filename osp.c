@@ -14,8 +14,54 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <time.h>
-
+#include <syslog.h>
 #include <termios.h>
+
+# if 1 /* temporary put it here */
+#include <math.h>
+
+/* UNIX timestamp of GPS epoch (1980/01/06 00:00:00). */
+#define GPS_EPOCH 315964800
+/* Current offset between UTC and GPS time, valid as of 2014. At some point
+ * a leap second will be anounced; this value should be incremented and a new
+ * firmware release should be pushed. Updates regarding the next leap seconds
+ * can be found at: http://en.wikipedia.org/wiki/Leap_second
+ * Note that we don't need the full algorithm here since if the time is off,
+ * it won't matter anyway. */
+#define GPS_CLOCK_OFFSET 16 /* Valid as of 2014/09/23. */
+
+/* This one hopefully won't change. :D */
+#define SECONDS_PER_WEEK (7*24*60*60)
+
+void utc_to_gps(uint16_t *wn, uint32_t *tow, time_t utc)
+{
+    /* Convert from UTC epoch to GPS epoch and compensate for leap seconds. */
+    uint32_t gps = utc - GPS_EPOCH + GPS_CLOCK_OFFSET;
+
+    /* Calculate week number and time of week. */
+    *wn =  gps / SECONDS_PER_WEEK;
+    *tow = gps % SECONDS_PER_WEEK;
+}
+
+ 
+static inline double deg2Rad(const double degrees)
+{
+    return (degrees / 180.0) * M_PI;
+}
+
+static const double kFirstEccentricitySquared = 6.69437999014 * 0.001;
+static const double kSemimajorAxis = 6378137;
+void lla_to_ecef(int32_t lat, int32_t lon, int32_t alt, int32_t *x, int32_t *y, int32_t *z)
+{
+    double lat_rad = deg2Rad((double)lat / (double)10000000.0f);
+    double lon_rad = deg2Rad((double)lon / (double)10000000.0f);
+    double altitude = (double)alt / (double)10000000.0f;
+    double xi = sqrt(1 - kFirstEccentricitySquared * sin(lat_rad) * sin(lat_rad));
+    *x = (kSemimajorAxis / xi + altitude) * cos(lat_rad) * cos(lon_rad);
+    *y = (kSemimajorAxis / xi + altitude) * cos(lat_rad) * sin(lon_rad);
+    *z = (kSemimajorAxis / xi * (1 - kFirstEccentricitySquared) + altitude) * sin(lat_rad);
+}
+#endif
 
 enum {
     SCAN_SKIPPED,
@@ -50,16 +96,13 @@ struct osp {
     } cache;
 };
 
-#define LOG_OSP 0
-#define LOG_LONG 0
+#define LOG_OSP 1
 #if LOG_OSP
-static void log(char dir, void *frame, size_t length) {
+static void log_line(char dir, void *frame, size_t length) {
     printf("%c (mid: %3d, length: %3d) ", dir, ((uint8_t*)frame)[0], length);
-#  ifdef LOG_LONG
     int i;
-    for(i = 0; i < length && i < 5; i++)
+    for(i = 0; i < length; i++)
         printf("%02x", ((uint8_t*)frame)[i]);
-#  endif
     printf("\n");
 }
 #else
@@ -68,7 +111,7 @@ static void log(char dir, void *frame, size_t length) {
 
 static inline int osp_send(osp_t *osp, size_t length)
 {
-    log('>', &osp->output, length);
+    log_line('>', &osp->output, length);
     return driver_send(osp->driver, &osp->output, length);
 }
 
@@ -94,8 +137,6 @@ static void osp_position_transfer_request(osp_t *osp)
     osp->output.mid215.sid = 1;
 
     if (osp->cache.valid) {
-        printf("cache-valid: (%d, %d)\n", osp->cache.position.lat,
-                osp->cache.position.lon);
         osp->output.mid215.sid1.latitude = htobe32(osp->cache.position.lat);
         osp->output.mid215.sid1.longitude =  htobe32(osp->cache.position.lon);
         osp->output.mid215.sid1.est_hor_err = 0x50; /* ~120m */
@@ -103,7 +144,7 @@ static void osp_position_transfer_request(osp_t *osp)
         osp->output.mid215.sid1.use_alt_aiding = false;
         osp_send(osp, 1 + sizeof(struct mid215));
     } else {
-        printf("skip. cache-invalid\n");
+        syslog(LOG_DEBUG, "skip. cache-invalid\n");
     }
 }
 static void osp_transfer_request(osp_t *osp) 
@@ -112,7 +153,7 @@ static void osp_transfer_request(osp_t *osp)
     if (sid == 1)
         osp_position_transfer_request(osp);
     else
-        printf("unhandled transfer request: %d\n", sid);
+        syslog(LOG_WARNING, "unhandled transfer request: %d\n", sid);
 }
 
 static void osp_geodetic_nav_data(osp_t *osp)
@@ -129,6 +170,7 @@ static void osp_geodetic_nav_data(osp_t *osp)
 
     if (osp->input.mid41.svs_in_fix) {
         osp->cache.clock_drift = be32toh(mid->clock_drift);
+        syslog(LOG_DEBUG, "clock_drift: %d\n", osp->cache.clock_drift);
     }
 
     uint32_t err_h = be32toh(mid->est_h_pos_error)/100;
@@ -142,15 +184,16 @@ static void osp_geodetic_nav_data(osp_t *osp)
         osp->cache.position.err_v = err_v;
     }
 
-    printf("[%02d/%02d/%02d %02d:%02d:%02d] " \
-           "nav valid: 0x%04x, nav type: 0x%04x, in fix: %d (%d, %d)\n", 
+    syslog(LOG_DEBUG, "[%02d/%02d/%02d %02d:%02d:%02d] " \
+           "nav valid: 0x%04x, nav type: 0x%04x, in fix: %d (%d, %d, %d)\n", 
             utc.tm_year, utc.tm_mon, utc.tm_mday,
             utc.tm_hour, utc.tm_min, utc.tm_sec,
             be16toh(mid->nav_valid.word),
             be16toh(mid->nav_type.word), 
             mid->svs_in_fix,
             be32toh(mid->latitude),
-            be32toh(mid->longitude)
+            be32toh(mid->longitude),
+            be32toh(mid->altitude_msl)
             );
 
     /* mktime is broken. Substract 1 from month */
@@ -178,39 +221,27 @@ static void osp_measure_nav_data_out(osp_t *osp)
 #endif
 }
 
-static void dump_state(struct mid4 *mid, int i)
-{
-    printf("0x%04x: \n", mid->channel[i].state.word);
-    printf("acquisition: %d\n", mid->channel[i].state.acquisition);
-    printf("carrier_phase: %d\n", mid->channel[i].state.carrier_phase);
-    printf("bit_sync: %d\n", mid->channel[i].state.bit_sync);
-    printf("subframe_sync: %d\n", mid->channel[i].state.subframe_sync);
-    printf("carrier_pullin: %d\n", mid->channel[i].state.carrier_pullin);
-    printf("locked_code: %d\n", mid->channel[i].state.locked_code);
-    printf("unknown: %d\n", mid->channel[i].state.unknown);
-    printf("ephemeris: %d\n", mid->channel[i].state.ephemeris);
-    printf("reserved: %d\n", mid->channel[i].state.reserved);
-
-}
-
 static void osp_measure_tracker_data_out(osp_t *osp)
 {
+    char buf[512];
+    int l = 0;
     struct mid4 *mid = &osp->input.mid4;
     int i, j;
-    printf("CN0: ");
+    l += sprintf(buf + l, "CN0: ");
     for(i = 0; i < mid->chans; i++) {
         int avg = 0;
         for(j = 0; j < 10; j++)
             avg += mid->channel[i].CN0[j];
         avg /= 10;
-
-        printf("%d(%d)0x%04x, ", mid->channel[i].svid, 
-                avg,
-                be16toh(mid->channel[i].state.word));
+        uint16_t state = be16toh(mid->channel[i].state);
+        struct mid4_ch_state *flags = (struct mid4_ch_state*)&state;
+        l += sprintf(buf + l, "%d(%s,%d), ", mid->channel[i].svid, 
+                flags->ephemeris ? "eph" : "!eph",
+                avg);
     }
-    printf("\n");
+    l += sprintf(buf + l, "\n");
+    syslog(LOG_DEBUG, "%s", buf);
 
-    dump_state(mid, 0);
 }
 
 static void osp_clock_status_data(osp_t *osp)
@@ -260,7 +291,7 @@ static void osp_dispatch(osp_t *osp, osp_frame_t *frame, size_t length)
         case 65:
             break;
         default:
-            log('<', &osp->input, length);
+            log_line('<', &osp->input, length);
     }
 }
 
@@ -339,9 +370,10 @@ static int init_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
     int *ack = (int*)arg;
     if (frame->mid == 11) {
         *ack = 0;
-        rv = SCAN_CONSUMED;
+        rv = SCAN_FINISHED;
     } else if (frame->mid == 12) {
-        *ack = frame->mid12.nacid;
+        *ack = frame->mid12.nacid | 0x80;
+        rv = SCAN_FINISHED;
     } else if (frame->mid == 71) {
         osp_hw_config_request(osp);
         rv = SCAN_FINISHED;
@@ -363,16 +395,24 @@ int osp_init(osp_t *osp, bool reset, osp_position_t *seed, uint32_t clock_drift)
         frame->mid = 128;
         frame->mid128.channels = 12;
         if (seed) {
-            printf("init form cache\n");
             int32_t x,y,z;
             uint32_t tow;
             uint16_t wn;
             time_t utc;
+
+            syslog(LOG_DEBUG, "init from seed");
+            osp->cache.position.lat = seed->lat;
+            osp->cache.position.lon = seed->lon;
+            osp->cache.position.alt = seed->alt;
+            osp->cache.clock_drift = clock_drift;
+            osp->cache.valid = true;
  
             /* format conversion */
             time(&utc);
-            //lla_to_ecef(seed->lat, seed->lon, seed->alt,  &x, &y, &z);
-            //utc_to_gps(&wn, &tow, utc);
+            lla_to_ecef(seed->lat, seed->lon, seed->alt,  &x, &y, &z);
+            utc_to_gps(&wn, &tow, utc);
+            syslog(LOG_DEBUG, "wn: %d, tow: %d, (%d, %d, %d)", 
+                    wn, tow, x, y, z);
 
             frame->mid128.ecef_x = htobe32(x);
             frame->mid128.ecef_y = htobe32(y);
@@ -387,6 +427,7 @@ int osp_init(osp_t *osp, bool reset, osp_position_t *seed, uint32_t clock_drift)
 
         retval = transfer(osp, 1 + sizeof(struct mid128), init_scanner, &ack);
         if (!retval && ack) {
+            syslog(LOG_DEBUG, "osp_init nack: %d\n", ack);
             retval = EAGAIN;
         }
         osp->busy = false;
@@ -406,7 +447,7 @@ static int ack_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
     return rv;
 }
 
-int osp_factory(osp_t *osp, bool keep_rom, bool clr_xocw)
+int osp_factory(osp_t *osp, bool keep_prom, bool keep_xocw)
 {
     int retval = EBUSY;
     int ack = -1;
@@ -419,9 +460,9 @@ int osp_factory(osp_t *osp, bool keep_rom, bool clr_xocw)
         memset(frame, 0, 1 + sizeof(struct mid128));
         frame->mid = 128;
         frame->mid128.factory.factory = true;
-        frame->mid128.factory.protocol = 3; // FIXME: return back to hardcoded OSP.
-        frame->mid128.factory.clr_xocw = clr_xocw;
-        frame->mid128.factory.keep_rom = keep_rom;
+        frame->mid128.factory.protocol = 3; 
+        frame->mid128.factory.clr_xocw = !keep_xocw;
+        frame->mid128.factory.keep_rom = keep_prom;
 
         retval = transfer(osp, 1 + sizeof(struct mid128), ack_scanner, &ack);
         if (!retval && ack) {
@@ -584,7 +625,7 @@ static int poll_almanac_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_
     return rv;
 }
 
-int osp_almanac_poll(osp_t *osp, void *almanac)
+int osp_almanac_poll(osp_t *osp, almanac_t *almanac)
 {
     int retval = EBUSY;
 
@@ -623,33 +664,45 @@ int osp_almanac_set(osp_t *osp, void *almanac)
     return retval;
 }
 
+struct poll_eph_result {
+    ephemeris_t *eph;
+    int count;
+};
+
 static int poll_eph_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
 {
     int rv = SCAN_SKIPPED;
     if (frame->mid == 15) {
-        uint8_t svid = frame->mid15.svid;
-        printf("got eph for: %d\n", svid);
+        struct poll_eph_result *result = arg;
+
+        result->eph[result->count].svid = frame->mid15.svid;
+        memcpy(result->eph[result->count].data,
+                frame->mid15.data, 45); /* FIXME: hardcoded size */
+        result->count++;
         rv = SCAN_CONSUMED;
     }
     return rv;
 }
 
-int osp_ephemeris_poll(osp_t *osp, int svid, void *eph)
+int osp_ephemeris_poll(osp_t *osp, int svid, ephemeris_t eph[12])
 {
     int retval = EBUSY;
-
+    struct poll_eph_result result;
+    result.eph = eph;
+    result.count = 0;
     pthread_mutex_lock(&osp->lock);
     if (!osp->busy) {
         osp->busy = true;
 
         osp_frame_t *frame = &osp->output;
+        memset(eph, 0, sizeof(eph));
         memset(frame, 0, 1 + sizeof(struct mid147));
         frame->mid = 147;
         frame->mid147.svid = svid;
 
         retval = transfer(osp, 1 + sizeof(struct mid147), 
-                poll_eph_scanner, eph);
-
+                poll_eph_scanner, &result);
+        retval = result.count;
         osp->busy = false;
     }
     pthread_mutex_unlock(&osp->lock);

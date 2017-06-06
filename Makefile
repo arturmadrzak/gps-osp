@@ -2,7 +2,7 @@ SRCS = osp-transport.c osp.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(OBJS:.o=.d)
 CFLAGS = -I../ -ggdb3
-LDLIBS = -ldriver -pthread
+LDLIBS = -ldriver -pthread -lm
 LDFLAGS = -L../driver 
 NAME=osp
 

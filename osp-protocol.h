@@ -47,6 +47,18 @@ msg_begin(2) {
 } msg_end;
 
 /* Measured Tracker Data Out - MID4 (0x04) */
+struct mid4_ch_state {
+   uint16_t acquisition:1,
+            carrier_phase:1,
+            bit_sync:1,
+            subframe_sync:1,
+            carrier_pullin:1,
+            locked_code:1,
+            unknown:1,
+            ephemeris:1,
+            reserved:8;
+} ;
+
 msg_begin(4) {
     int16_t gps_week;
     int32_t gps_tow;
@@ -55,18 +67,7 @@ msg_begin(4) {
         uint8_t svid;
         uint8_t azimuth;
         uint8_t elev;
-        union {
-            uint16_t acquisition:1,
-                    carrier_phase:1,
-                    bit_sync:1,
-                    subframe_sync:1,
-                    carrier_pullin:1,
-                    locked_code:1,
-                    unknown:1,
-                    ephemeris:1,
-                    reserved:8;
-            uint16_t word;
-        } state;
+        uint16_t state;
         uint8_t CN0[10];
     } channel[12];
 } msg_end;

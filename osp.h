@@ -16,6 +16,13 @@ typedef struct osp_position {
 } osp_position_t;
 
 typedef struct {
+    uint8_t svid;
+    uint8_t data[45];
+} ephemeris_t;
+
+typedef uint8_t almanac_t[28*32];
+
+typedef struct {
     void (*location)(void *arg, int svs, int32_t lat, int32_t lon, time_t time);
 } osp_callbacks_t;
 
@@ -36,9 +43,9 @@ int osp_open_session(osp_t *osp, bool resume);
 int osp_close_session(osp_t *osp, bool suspend);
 int osp_pwr_ptf(osp_t *osp, uint32_t period, uint32_t m_search, uint32_t m_off);
 int osp_pwr_full(osp_t *osp);
-int osp_almanac_poll(osp_t *osp, void *almanac);
+int osp_almanac_poll(osp_t *osp, almanac_t *almanac);
 int osp_almanac_set(osp_t *osp, void *almanac);
-int osp_ephemeris_poll(osp_t *osp, int svid, void *eph);
+int osp_ephemeris_poll(osp_t *osp, int svid, ephemeris_t eph[12]);
 int osp_ephemeris_set(osp_t *osp, void *eph);
 int osp_cw(osp_t *osp, bool enable);
 int osp_set_msg_rate(osp_t *osp, uint8_t mid, uint8_t mode, uint8_t rate);
