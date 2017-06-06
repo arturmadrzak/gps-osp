@@ -466,6 +466,7 @@ int osp_factory(osp_t *osp, bool keep_prom, bool keep_xocw)
 
         retval = transfer(osp, 1 + sizeof(struct mid128), ack_scanner, &ack);
         if (!retval && ack) {
+            syslog(LOG_DEBUG, "osp_factory nack: %d\n", ack);
             retval = EAGAIN;
         }
         osp->busy = false;

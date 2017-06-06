@@ -119,6 +119,10 @@ static void sig_handler(int signum)
     terminate = 1;
 }
 
+static void sig_ignore(int signum)
+{
+}
+
 int main(int argc, char* argv[])
 {
     struct arguments arguments;
@@ -128,6 +132,7 @@ int main(int argc, char* argv[])
     openlog(NULL, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_USER);
 
     signal(SIGINT, sig_handler);
+    signal(SIGUSR1, sig_ignore);
 
     argp_parse(&argp, argc, argv, 0, NULL, &arguments);
 
@@ -142,13 +147,15 @@ int main(int argc, char* argv[])
     serial_config(serial, arguments.device, B115200);
  
     osp_start(osp);
-
+    sleep(1); /* wait for thread setle */
     if (arguments.factory) {
         syslog(LOG_INFO, "osp_factory: %s\n", 
             osp_factory(osp, false, false) ? "FAIL" : "SUCCESS");
-        
-        usleep(100*1000);
+	sleep(1);
+	osp_stop(osp);
         force_osp(serial, arguments.device);
+    	serial_config(serial, arguments.device, B115200);
+    	osp_start(osp);
     }
 
     if (arguments.seed) {
