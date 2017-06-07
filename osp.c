@@ -127,6 +127,9 @@ static void osp_hw_config_request(osp_t *osp)
     osp->output.mid = 214;
     osp->output.mid214.hw_config.rtc_available = true;
     osp->output.mid214.hw_config.rtc_internal = true;
+    osp->output.mid214.nw_enhance_type.aux_navmodel = true;
+    osp->output.mid214.nw_enhance_type.navbit_aiding_123 = true;
+    osp->output.mid214.nw_enhance_type.navbit_aiding_45 = true;
     osp_send(osp, 1 + sizeof(struct mid214));
 }
 
@@ -254,6 +257,7 @@ static void osp_nav_lib_data(osp_t *osp)
 
 static void osp_dispatch(osp_t *osp, osp_frame_t *frame, size_t length)
 {
+    log_line('<', &osp->input, length);
     if (osp->scanner) {
         int srv = osp->scanner(osp, osp->scan_arg, frame, length);
         if (srv == SCAN_FINISHED) {
@@ -284,14 +288,12 @@ static void osp_dispatch(osp_t *osp, osp_frame_t *frame, size_t length)
         case 41:
             osp_geodetic_nav_data(osp);
             break;
+        case 71:
+            osp_hw_config_request(osp);
+            break;
         case 73:
             osp_transfer_request(osp);
             break;
-        case 9:
-        case 65:
-            break;
-        default:
-            log_line('<', &osp->input, length);
     }
 }
 
@@ -354,7 +356,7 @@ static int transfer(osp_t *osp, size_t length, void *scanner, void *response)
 
     if (!(retval = osp_send(osp, length)) && scanner) {
         clock_gettime(CLOCK_REALTIME, &tow); 
-        tow.tv_sec += 15; 
+        tow.tv_sec += 3; 
         tow.tv_nsec = 0; 
         set_scanner(osp, scanner, response);
         retval = pthread_cond_timedwait(&osp->signal, &osp->lock, &tow);
@@ -363,8 +365,7 @@ static int transfer(osp_t *osp, size_t length, void *scanner, void *response)
     return retval;
 }
 
-
-static int init_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
+static int ack_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
 {
     int rv = SCAN_SKIPPED;
     int *ack = (int*)arg;
@@ -374,10 +375,7 @@ static int init_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
     } else if (frame->mid == 12) {
         *ack = frame->mid12.nacid | 0x80;
         rv = SCAN_FINISHED;
-    } else if (frame->mid == 71) {
-        osp_hw_config_request(osp);
-        rv = SCAN_FINISHED;
-    }
+    } 
     return rv;
 }
 
@@ -425,7 +423,7 @@ int osp_init(osp_t *osp, bool reset, osp_position_t *seed, uint32_t clock_drift)
 
         frame->mid128.soft.system_reset = reset;
 
-        retval = transfer(osp, 1 + sizeof(struct mid128), init_scanner, &ack);
+        retval = transfer(osp, 1 + sizeof(struct mid128), ack_scanner, &ack);
         if (!retval && ack) {
             syslog(LOG_DEBUG, "osp_init nack: %d\n", ack);
             retval = EAGAIN;
@@ -434,17 +432,6 @@ int osp_init(osp_t *osp, bool reset, osp_position_t *seed, uint32_t clock_drift)
     }
     pthread_mutex_unlock(&osp->lock);
     return retval;
-}
-
-static int ack_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
-{
-    int rv = SCAN_SKIPPED;
-    int *ack = (int*)arg;
-    if (frame->mid == 11) {
-        *ack = 0;
-        rv = SCAN_FINISHED;
-    }
-    return rv;
 }
 
 int osp_factory(osp_t *osp, bool keep_prom, bool keep_xocw)
@@ -460,7 +447,7 @@ int osp_factory(osp_t *osp, bool keep_prom, bool keep_xocw)
         memset(frame, 0, 1 + sizeof(struct mid128));
         frame->mid = 128;
         frame->mid128.factory.factory = true;
-        frame->mid128.factory.protocol = 3; 
+        frame->mid128.factory.protocol = 0; 
         frame->mid128.factory.clr_xocw = !keep_xocw;
         frame->mid128.factory.keep_rom = keep_prom;
 
@@ -647,9 +634,10 @@ int osp_almanac_poll(osp_t *osp, almanac_t *almanac)
     return retval;
 }
 
-int osp_almanac_set(osp_t *osp, void *almanac)
+int osp_almanac_set(osp_t *osp, almanac_t *almanac)
 {
     int retval = EBUSY;
+    int ack = -1;
 
     pthread_mutex_lock(&osp->lock);
     if (!osp->busy) {
@@ -657,8 +645,12 @@ int osp_almanac_set(osp_t *osp, void *almanac)
 
         osp_frame_t *frame = &osp->output;
         frame->mid = 130;
-        memcpy(&frame->mid130, almanac, sizeof(struct mid130));
-        retval = transfer(osp, 1 + sizeof(struct mid130), NULL, NULL);
+        memcpy(frame->mid130.rows, almanac, sizeof(struct mid130));
+        retval = transfer(osp, 1 + sizeof(struct mid130), ack_scanner, &ack);
+        if (!retval && ack) {
+            syslog(LOG_DEBUG, "osp_factory nack: %d\n", ack);
+            retval = EAGAIN;
+        }
         osp->busy = false;
     }
     pthread_mutex_unlock(&osp->lock);
@@ -678,7 +670,7 @@ static int poll_eph_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t le
 
         result->eph[result->count].svid = frame->mid15.svid;
         memcpy(result->eph[result->count].data,
-                frame->mid15.data, 45); /* FIXME: hardcoded size */
+                frame->mid15.data, sizeof(uint16_t)*45); /* FIXME: hardcoded size */
         result->count++;
         rv = SCAN_CONSUMED;
     }
@@ -711,6 +703,29 @@ int osp_ephemeris_poll(osp_t *osp, int svid, ephemeris_t eph[12])
 
 }
 
+int osp_ephemeris_set(osp_t *osp, ephemeris_t *eph)
+{
+    int retval = EBUSY;
+    int ack = -1;
+
+    pthread_mutex_lock(&osp->lock);
+    if (!osp->busy) {
+        osp->busy = true;
+        
+        osp_frame_t *frame = &osp->output;
+        frame->mid = 149;
+        memcpy(&frame->mid149, eph->data, sizeof(struct mid149));
+        retval = transfer(osp, 1 + sizeof(struct mid149), ack_scanner, &ack);
+        if (!retval && ack) {
+            syslog(LOG_DEBUG, "osp_ephemeris_set nack: %d\n", ack);
+            retval = EAGAIN;
+        }
+        osp->busy = false;
+    }
+    pthread_mutex_unlock(&osp->lock);
+    return retval;
+
+}
 
 static int cw_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t len)
 {

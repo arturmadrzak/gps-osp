@@ -22,6 +22,8 @@ static struct argp_option options[] = {
     {"force", 'f', 0, 0, "switch from NMEA to OSP protocol"},
     {"position", 'p', "LAT,LON,ALT", 0, "seed position"},
     {"drift", 'd', "DRIFT", 0, "gps clock drift"},
+    {"download", 'l', 0, 0, "download almanac and ephmeresis on exit"},
+    {"upload", 'u', 0, 0, "upload almanac and ephmeresis on start"},
     { 0 }
 };
 static struct argp argp = { options, parse_opt, 0, doc };
@@ -34,6 +36,8 @@ struct arguments {
     int factory;
     int force;
     int seed;
+    int download;
+    int upload;
     int32_t lat, lon, alt;
     uint32_t drift;
 };
@@ -60,6 +64,12 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
             break;
         case 'f':
             arguments->force = 1;
+            break;
+        case 'u':
+            arguments->upload = 1;
+            break;
+        case 'l':
+            arguments->download = 1;
             break;
         case 'd':
             arguments->seed = 1;
@@ -88,9 +98,9 @@ static void force_osp(io_t *serial, char *dev)
     serial_config(serial, dev, B4800);
     if (!err) (err = serial->open(serial));
     if (!err) (err = (serial->write(serial, cmd, sizeof(cmd)) != sizeof(cmd)));
+    !err ? printf("> |%s|", cmd) : printf("error: %s\n", strerror(errno));
     usleep(100*1000); /* sending bytes */
     if (!err) (err = (serial->close(serial)));
-    !err ? printf("> |%s|", cmd) : printf("error: %s\n", strerror(errno));
 }
 
 static void poll_eph(osp_t *osp, char *filename)
@@ -112,6 +122,28 @@ static void poll_almanac(osp_t *osp, char *filename)
     fclose(f);
 }
 
+static void set_eph(osp_t *osp, char *filename)
+{
+    ephemeris_t eph[12];
+    int count;
+    memset(eph, 0, sizeof(eph));
+    FILE *f = fopen(filename, "rb");
+    count = fread(eph, sizeof(ephemeris_t), 12, f);
+    fclose(f);
+    while(count--) {
+        osp_ephemeris_set(osp, eph);
+    }
+}
+
+static void set_almanac(osp_t *osp, char *filename)
+{
+    almanac_t almanac;
+    FILE *f = fopen(filename, "rb");
+    fread(&almanac, sizeof(almanac_t), 1, f);
+    fclose(f);
+    osp_almanac_set(osp, &almanac);
+}
+
 static int terminate = 0;
 
 static void sig_handler(int signum)
@@ -128,6 +160,8 @@ int main(int argc, char* argv[])
     struct arguments arguments;
     memset(&arguments, 0, sizeof(arguments));
     arguments.device = "/dev/ttyUSB0";
+    arguments.almanac = "almanac.bin";
+    arguments.eph = "eph.bin";
 
     openlog(NULL, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_USER);
 
@@ -147,17 +181,17 @@ int main(int argc, char* argv[])
     serial_config(serial, arguments.device, B115200);
  
     osp_start(osp);
-    sleep(1); /* wait for thread setle */
+    /* wait for osp running */
+    usleep(100*1000);
     if (arguments.factory) {
         syslog(LOG_INFO, "osp_factory: %s\n", 
             osp_factory(osp, false, false) ? "FAIL" : "SUCCESS");
-	sleep(1);
-	osp_stop(osp);
+	    sleep(1);
+	    osp_stop(osp);
         force_osp(serial, arguments.device);
     	serial_config(serial, arguments.device, B115200);
     	osp_start(osp);
     }
-
     if (arguments.seed) {
         osp_position_t seed = {
             .lat = arguments.lat,
@@ -169,16 +203,25 @@ int main(int argc, char* argv[])
 
         syslog(LOG_INFO, "osp_init: %s\n", 
             osp_init(osp, true, &seed, arguments.drift) ? "FAIL" : "SUCCESS");
-        //set_almanac();
-        //set_eph();
+    } else {
+        syslog(LOG_INFO, "osp_init: %s\n", 
+            osp_init(osp, true, NULL, 0) ? "FAIL" : "SUCCESS");
+    }
+
+    usleep(500*1000);
+
+    if (arguments.upload) {
+        set_almanac(osp, arguments.almanac);
+        //set_eph(osp, arguments.eph);
     }
 
     for(;!terminate;) {
-        sleep(1);
+        usleep(100*1000);
     }
-
-    //poll_almanac(osp, "almanac.bin");
-    //poll_eph(osp, "eph.bin");
+    if (arguments.download) {
+        poll_almanac(osp, arguments.almanac);
+        poll_eph(osp, arguments.eph);
+    }
 
     osp_stop(osp);
     free(osp);

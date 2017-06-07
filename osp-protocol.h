@@ -336,7 +336,7 @@ msg_begin(128) {
 
 /* Set almanac - MID130 (0x82) */
 msg_begin(130) {
-    struct almanac_row rows[14];
+    struct almanac_row rows[32];
 } msg_end;
 
 /* Set protocol - MID135 (0x87) */
@@ -406,8 +406,7 @@ msg_begin(213) {
 
 /* Hardware Configuration Response - MID214 (0xD6) */
 msg_begin(214) {
-    union {
-        uint8_t byte;
+    struct {
         uint8_t time_ta:1,  /* Precise Time Transfer Availability */
                 time_ta_dir:1,
                 freq_ta:1,
@@ -418,8 +417,7 @@ msg_begin(214) {
                 ref_clk:1;
     } hw_config;
     uint8_t nominal_freq[5];
-    union {
-        uint8_t byte;
+    struct {
         uint8_t reserved1:2,
                 aux_navmodel:1,
                 navbit_aiding_123:1,
