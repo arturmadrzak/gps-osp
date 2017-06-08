@@ -189,7 +189,7 @@ static void osp_geodetic_nav_data(osp_t *osp)
 
     syslog(LOG_DEBUG, "[%02d/%02d/%02d %02d:%02d:%02d] " \
            "nav valid: 0x%04x, nav type: 0x%04x, in fix: %d (%d, %d, %d)\n", 
-            utc.tm_year, utc.tm_mon, utc.tm_mday,
+            utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
             utc.tm_hour, utc.tm_min, utc.tm_sec,
             be16toh(mid->nav_valid.word),
             be16toh(mid->nav_type.word), 
@@ -409,6 +409,7 @@ int osp_init(osp_t *osp, bool reset, osp_position_t *seed, uint32_t clock_drift)
             time(&utc);
             lla_to_ecef(seed->lat, seed->lon, seed->alt,  &x, &y, &z);
             utc_to_gps(&wn, &tow, utc);
+            tow *= 100;
             syslog(LOG_DEBUG, "wn: %d, tow: %d, (%d, %d, %d)", 
                     wn, tow, x, y, z);
 

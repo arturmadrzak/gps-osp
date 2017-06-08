@@ -208,11 +208,11 @@ int main(int argc, char* argv[])
             osp_init(osp, true, NULL, 0) ? "FAIL" : "SUCCESS");
     }
 
-    usleep(500*1000);
+    usleep(1500*1000);
 
     if (arguments.upload) {
         set_almanac(osp, arguments.almanac);
-        //set_eph(osp, arguments.eph);
+        set_eph(osp, arguments.eph);
     }
 
     for(;!terminate;) {
