@@ -9,6 +9,13 @@
 #include "driver/serial-io.h"
 #include "osp.h"
 
+#define execf(f) \
+    if ((f)) {\
+        syslog(LOG_ERR, #f ": FAIL");\
+    } else { \
+        syslog(LOG_INFO, #f ": SUCCESS");\
+    }
+
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state);
 
@@ -117,7 +124,7 @@ static void poll_eph(osp_t *osp, char *filename)
 {
     int count;
     ephemeris_t eph[12];
-    count = osp_ephemeris_poll(osp, 0, eph);
+    execf(count = osp_ephemeris_poll(osp, 0, eph) < 0);
     FILE *f = fopen(filename, "wb");
     fwrite(eph, sizeof(ephemeris_t), count, f);
     fclose(f);
@@ -126,7 +133,7 @@ static void poll_eph(osp_t *osp, char *filename)
 static void poll_almanac(osp_t *osp, char *filename)
 {
     almanac_t almanac;
-    osp_almanac_poll(osp, &almanac);
+    execf(osp_almanac_poll(osp, &almanac));
     FILE *f = fopen(filename, "wb");
     fwrite(&almanac, sizeof(almanac_t), 1, f);
     fclose(f);
@@ -141,7 +148,7 @@ static void set_eph(osp_t *osp, char *filename)
     count = fread(eph, sizeof(ephemeris_t), 12, f);
     fclose(f);
     while(count--) {
-        osp_ephemeris_set(osp, eph);
+        execf(osp_ephemeris_set(osp, eph));
     }
 }
 
@@ -151,7 +158,7 @@ static void set_almanac(osp_t *osp, char *filename)
     FILE *f = fopen(filename, "rb");
     fread(&almanac, sizeof(almanac_t), 1, f);
     fclose(f);
-    osp_almanac_set(osp, &almanac);
+    execf(osp_almanac_set(osp, &almanac));
 }
 
 static int terminate = 0;
@@ -182,7 +189,7 @@ int main(int argc, char* argv[])
     arguments.almanac = "almanac.bin";
     arguments.eph = "eph.bin";
 
-    openlog(NULL, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_USER);
+    openlog(NULL, LOG_CONS | LOG_NDELAY, LOG_USER | LOG_LOCAL0);
 
     signal(SIGINT, sig_handler);
     signal(SIGUSR1, sig_ignore);
@@ -193,6 +200,7 @@ int main(int argc, char* argv[])
     io_t *transport = osp_transport_alloc(serial);
     driver_t *driver = driver_alloc(transport);
     osp_t *osp;
+
     if (arguments.measure) {
         osp = osp_alloc(driver, NULL, NULL);
     } else {
@@ -210,8 +218,7 @@ int main(int argc, char* argv[])
     /* wait for osp running */
     usleep(10*1000);
     if (arguments.factory) {
-        syslog(LOG_INFO, "osp_factory: %s\n", 
-            osp_factory(osp, false, false) ? "FAIL" : "SUCCESS");
+            execf(osp_factory(osp, false, false));
     } else {
         if (arguments.seed) {
             osp_position_t seed = {
@@ -222,15 +229,14 @@ int main(int argc, char* argv[])
                 .err_v = 0,
             };        
 
-            syslog(LOG_INFO, "osp_init: %s\n", 
-                osp_init(osp, true, &seed, arguments.drift) ? "FAIL" : "SUCCESS");
+            execf(osp_init(osp, true, &seed, arguments.drift));
         } else {
-            syslog(LOG_INFO, "osp_init: %s\n", 
-                osp_init(osp, false, NULL, 0) ? "FAIL" : "SUCCESS");
+            execf(osp_init(osp, false, NULL, 0));
         }
-        /* TODO: open session!!! */
 
-        sleep(1); /* Wait for OkToSend, FIXME: add callback for it, or embed it in init */
+        sleep(1); 
+
+        execf(osp_open_session(osp, false));
 
         if (arguments.upload) {
             set_almanac(osp, arguments.almanac);
@@ -241,7 +247,6 @@ int main(int argc, char* argv[])
             poll_almanac(osp, arguments.almanac);
             poll_eph(osp, arguments.eph);
         }
-
         
         if (arguments.listen || arguments.measure) {
             initialized = 1;
@@ -249,6 +254,8 @@ int main(int argc, char* argv[])
                 usleep(100*1000);
         }
     }
+
+    execf(osp_close_session(osp, false));
 
     osp_stop(osp);
     free(osp);

@@ -96,17 +96,19 @@ struct osp {
     } cache;
 };
 
-#define LOG_OSP 1
-#if LOG_OSP
+#define CONFIG_DUMP_PROTOCOL 1
+#if CONFIG_DUMP_PROTOCOL
 static void log_line(char dir, void *frame, size_t length) {
-    printf("%c (mid: %3d, length: %3d) ", dir, ((uint8_t*)frame)[0], length);
+    char message[128];
+    int l;
+    l = snprintf(message, sizeof(message), "%c (mid: %3d, length: %3d) ", dir, ((uint8_t*)frame)[0], length);
     int i;
     for(i = 0; i < length; i++)
-        printf("%02x", ((uint8_t*)frame)[i]);
-    printf("\n");
+        l += snprintf(message + l, sizeof(message) - l, "%02x", ((uint8_t*)frame)[i]);
+    syslog(LOG_DEBUG | LOG_LOCAL0, message);
 }
 #else
-#  define log(...)
+#   define log_line(...)
 #endif
 
 static inline int osp_send(osp_t *osp, size_t length)
@@ -770,7 +772,6 @@ int osp_cw(osp_t *osp, bool enable)
     pthread_mutex_unlock(&osp->lock);
     return retval;
 }
-
 
 int osp_set_msg_rate(osp_t *osp, uint8_t mid, uint8_t mode, uint8_t rate)
 {
