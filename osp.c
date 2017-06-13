@@ -254,7 +254,7 @@ static void osp_measure_tracker_data_out(osp_t *osp)
                 avg);
     }
     l += sprintf(buf + l, "\n");
-    syslog(LOG_DEBUG, "%s", buf);
+    syslog(LOG_DEBUG, buf);
 
 }
 
@@ -615,12 +615,10 @@ static int poll_almanac_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_
             uint8_t *row = (uint8_t*)&frame->mid14.row;
             int offset = svid * size;
             memcpy(&data[offset], row, size);
-            if(svid == 31) {
-                rv = SCAN_FINISHED;
-            } else {
-                rv = SCAN_CONSUMED;
-            }
+            rv = SCAN_CONSUMED;
         }
+    } else if (frame->mid == 11 && frame->mid11.aid == 146) {
+        rv = SCAN_FINISHED;
     }
     return rv;
 }
@@ -685,6 +683,8 @@ static int poll_eph_scanner(osp_t *osp, void *arg, osp_frame_t *frame, size_t le
                 frame->mid15.data, sizeof(uint16_t)*45); /* FIXME: hardcoded size */
         result->count++;
         rv = SCAN_CONSUMED;
+    } else if (frame->mid == 11 && frame->mid11.aid == 147) {
+        rv = SCAN_FINISHED;
     }
     return rv;
 }
@@ -705,9 +705,10 @@ int osp_ephemeris_poll(osp_t *osp, int svid, ephemeris_t eph[12])
         frame->mid = 147;
         frame->mid147.svid = svid;
 
-        retval = transfer(osp, 1 + sizeof(struct mid147), 
-                poll_eph_scanner, &result);
-        retval = result.count;
+        retval = transfer(osp, 1 + sizeof(struct mid147), poll_eph_scanner, &result);
+        if (!retval) {
+            retval = result.count;
+        }
         osp->busy = false;
     }
     pthread_mutex_unlock(&osp->lock);

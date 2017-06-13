@@ -201,7 +201,7 @@ int main(int argc, char* argv[])
     driver_t *driver = driver_alloc(transport);
     osp_t *osp;
 
-    if (arguments.measure) {
+    if (!arguments.measure) {
         osp = osp_alloc(driver, NULL, NULL);
     } else {
         cbs.location = location_cb;
