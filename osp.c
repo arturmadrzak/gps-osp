@@ -127,6 +127,7 @@ static void osp_hw_config_request(osp_t *osp)
     osp->output.mid = 214;
     osp->output.mid214.hw_config.rtc_available = true;
     osp->output.mid214.hw_config.rtc_internal = true;
+    //osp->output.mid214.hw_config.coarse_time_ta = true;
     osp->output.mid214.nw_enhance_type.aux_navmodel = true;
     osp->output.mid214.nw_enhance_type.navbit_aiding_123 = true;
     osp->output.mid214.nw_enhance_type.navbit_aiding_45 = true;
@@ -145,11 +146,19 @@ static void osp_position_transfer_request(osp_t *osp)
         osp->output.mid215.sid1.est_hor_err = 0x50; /* ~120m */
         osp->output.mid215.sid1.est_ver_err = htobe16(osp->cache.position.err_v*10);
         osp->output.mid215.sid1.use_alt_aiding = false;
-        osp_send(osp, 1 + sizeof(struct mid215));
+        osp_send(osp, 1 + 1 + sizeof(osp->output.mid215.sid1));
     } else {
         syslog(LOG_DEBUG, "skip. cache-invalid\n");
     }
 }
+
+static void osp_time_transfer_request(osp_t *osp)
+{
+    memset(&osp->output.mid215, 0, sizeof(struct mid215));
+    osp->output.mid = 215;
+    osp->output.mid215.sid = 2;
+}
+
 static void osp_transfer_request(osp_t *osp) 
 {
     uint8_t sid = osp->input.mid73.sid;

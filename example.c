@@ -24,6 +24,8 @@ static struct argp_option options[] = {
     {"drift", 'd', "DRIFT", 0, "gps clock drift"},
     {"download", 'l', 0, 0, "download almanac and ephmeresis on exit"},
     {"upload", 'u', 0, 0, "upload almanac and ephmeresis on start"},
+    {"listen", 't', 0, 0, "do not exit, listen messages"},
+    {"measure", 'm', 0, 0, "do not exit till get fix"},
     { 0 }
 };
 static struct argp argp = { options, parse_opt, 0, doc };
@@ -33,11 +35,13 @@ struct arguments {
     char *eph;
     char *almanac;
     int verbose;
+    int listen;
     int factory;
     int force;
     int seed;
     int download;
     int upload;
+    int measure;
     int32_t lat, lon, alt;
     uint32_t drift;
 };
@@ -68,8 +72,14 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
         case 'u':
             arguments->upload = 1;
             break;
+        case 't':
+            arguments->listen = 1;
+            break;
         case 'l':
             arguments->download = 1;
+            break;
+        case 'm':
+            arguments->measure = 1;
             break;
         case 'd':
             arguments->seed = 1;
@@ -155,8 +165,17 @@ static void sig_ignore(int signum)
 {
 }
 
+void location_cb(void *arg, int svs, int32_t lat, int32_t lon, time_t time)
+{
+    if (svs >= 3 && *(int*)arg) {
+        terminate = 1;
+    }
+}
+
 int main(int argc, char* argv[])
 {
+    osp_callbacks_t cbs;
+    int initialized = 0;
     struct arguments arguments;
     memset(&arguments, 0, sizeof(arguments));
     arguments.device = "/dev/ttyUSB0";
@@ -173,7 +192,13 @@ int main(int argc, char* argv[])
     io_t *serial = serial_alloc();
     io_t *transport = osp_transport_alloc(serial);
     driver_t *driver = driver_alloc(transport);
-    osp_t *osp = osp_alloc(driver, NULL, NULL);
+    osp_t *osp;
+    if (arguments.measure) {
+        osp = osp_alloc(driver, NULL, NULL);
+    } else {
+        cbs.location = location_cb;
+        osp = osp_alloc(driver, &cbs, &initialized);
+    }
 
     if (arguments.force)
         force_osp(serial, arguments.device);
@@ -181,46 +206,48 @@ int main(int argc, char* argv[])
     serial_config(serial, arguments.device, B115200);
  
     osp_start(osp);
+
     /* wait for osp running */
-    usleep(100*1000);
+    usleep(10*1000);
     if (arguments.factory) {
         syslog(LOG_INFO, "osp_factory: %s\n", 
             osp_factory(osp, false, false) ? "FAIL" : "SUCCESS");
-	    sleep(1);
-	    osp_stop(osp);
-        force_osp(serial, arguments.device);
-    	serial_config(serial, arguments.device, B115200);
-    	osp_start(osp);
-    }
-    if (arguments.seed) {
-        osp_position_t seed = {
-            .lat = arguments.lat,
-            .lon = arguments.lon,
-            .alt = arguments.alt,
-            .err_h = 0,
-            .err_v = 0,
-        };        
-
-        syslog(LOG_INFO, "osp_init: %s\n", 
-            osp_init(osp, true, &seed, arguments.drift) ? "FAIL" : "SUCCESS");
     } else {
-        syslog(LOG_INFO, "osp_init: %s\n", 
-            osp_init(osp, true, NULL, 0) ? "FAIL" : "SUCCESS");
-    }
+        if (arguments.seed) {
+            osp_position_t seed = {
+                .lat = arguments.lat,
+                .lon = arguments.lon,
+                .alt = arguments.alt,
+                .err_h = 0,
+                .err_v = 0,
+            };        
 
-    usleep(1500*1000);
+            syslog(LOG_INFO, "osp_init: %s\n", 
+                osp_init(osp, true, &seed, arguments.drift) ? "FAIL" : "SUCCESS");
+        } else {
+            syslog(LOG_INFO, "osp_init: %s\n", 
+                osp_init(osp, false, NULL, 0) ? "FAIL" : "SUCCESS");
+        }
+        /* TODO: open session!!! */
 
-    if (arguments.upload) {
-        set_almanac(osp, arguments.almanac);
-        set_eph(osp, arguments.eph);
-    }
+        sleep(1); /* Wait for OkToSend, FIXME: add callback for it, or embed it in init */
 
-    for(;!terminate;) {
-        usleep(100*1000);
-    }
-    if (arguments.download) {
-        poll_almanac(osp, arguments.almanac);
-        poll_eph(osp, arguments.eph);
+        if (arguments.upload) {
+            set_almanac(osp, arguments.almanac);
+            set_eph(osp, arguments.eph);
+        }
+
+        if (arguments.download) {
+            poll_almanac(osp, arguments.almanac);
+            poll_eph(osp, arguments.eph);
+        }
+
+        
+        if (arguments.listen || arguments.measure) {
+            initialized = 1;
+            for(;!terminate;)
+                usleep(100*1000);
+        }
     }
 
     osp_stop(osp);

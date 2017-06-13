@@ -413,7 +413,7 @@ msg_begin(214) {
                 freq_ta_method:1,
                 rtc_available:1,
                 rtc_internal:1,
-                corase_time_ta:1,
+                coarse_time_ta:1,
                 ref_clk:1;
     } hw_config;
     uint8_t nominal_freq[5];
@@ -438,6 +438,13 @@ msg_begin(215) {
             int16_t est_ver_err;
             uint8_t use_alt_aiding;
         } sid1;
+        struct {
+            uint8_t tt_type;
+            uint16_t week_number;
+            uint8_t gps_time[5];
+            uint8_t deltat_utc[3];
+            uint8_t time_accuracy;
+        } sid2;
     };
 } msg_end;
 
