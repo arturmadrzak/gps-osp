@@ -11,46 +11,32 @@
 
 #define execf(f) \
     if ((f)) {\
-        syslog(LOG_ERR, #f ": FAIL");\
+        printf(#f ": FAIL\n");\
     } else { \
-        syslog(LOG_INFO, #f ": SUCCESS");\
+        printf(#f ": SUCCESS\n");\
     }
-
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state);
 
 static char doc[] = "Example of using OSP protocol";
 static struct argp_option options[] = {
-    {"verbose", 'v', 0, 0, "verbose output"},
-    {"device", 's', "DEVICE", 0,  "serial device to be used"},
-    {"ephemeris", 'e', "FILE", 0, "ephemeris data file"},
-    {"almanac", 'a', "FILE", 0, "almanac data file"},
-    {"factory", 'r', 0, 0, "perform factory reset"},
-    {"force", 'f', 0, 0, "switch from NMEA to OSP protocol"},
-    {"position", 'p', "LAT,LON,ALT", 0, "seed position"},
-    {"drift", 'd', "DRIFT", 0, "gps clock drift"},
-    {"download", 'l', 0, 0, "download almanac and ephmeresis on exit"},
-    {"upload", 'u', 0, 0, "upload almanac and ephmeresis on start"},
-    {"listen", 't', 0, 0, "do not exit, listen messages"},
-    {"measure", 'm', 0, 0, "do not exit till get fix"},
+    {"device", 't', "DEVICE", 0,  "tty device to be used"},
+    {"version", 'v', 0, 0, "print firmware version"},
+    {"factory", 'f', 0, 0, "perform factory reset"},
+    {"noinit", 'n', 0, 0, "do not send data initialization frame"},
+    {"osp", 'o', 0, 0, "switch from NMEA to OSP protocol"},
+    {"listen", 'l', 0, 0, "do not exit, listen messages"},
     { 0 }
 };
 static struct argp argp = { options, parse_opt, 0, doc };
 
 struct arguments {
     char *device;
-    char *eph;
-    char *almanac;
-    int verbose;
-    int listen;
     int factory;
-    int force;
-    int seed;
-    int download;
-    int upload;
-    int measure;
-    int32_t lat, lon, alt;
-    uint32_t drift;
+    int noinit;
+    int osp;
+    int listen;
+    int version;
 };
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state)
@@ -59,46 +45,22 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
     switch(key)
     {
         case 'v':
-            arguments->verbose = 1;
-            break;
-        case 's':
-            arguments->device = arg;
-            break;
-        case 'e':
-            arguments->eph = arg;
-            break;
-        case 'a':
-            arguments->almanac = arg;
-            break;
-        case 'r':
-            arguments->factory = 1;
-            break;
-        case 'f':
-            arguments->force = 1;
-            break;
-        case 'u':
-            arguments->upload = 1;
+            arguments->version = 1;
             break;
         case 't':
-            arguments->listen = 1;
+            arguments->device = arg;
+            break;
+        case 'f':
+            arguments->factory = 1;
+            break;
+        case 'n':
+            arguments->noinit = 1;
             break;
         case 'l':
-            arguments->download = 1;
+            arguments->listen = 1;
             break;
-        case 'm':
-            arguments->measure = 1;
-            break;
-        case 'd':
-            arguments->seed = 1;
-            if (sscanf(arg, "%u", &arguments->drift) != 1)
-                return ARGP_ERR_UNKNOWN;
-            break;
-        case 'p':
-            arguments->seed = 1;
-            if (sscanf(arg, "%d,%d,%d",
-                &arguments->lat, &arguments->lon, &arguments->alt) != 3) {
-                return ARGP_ERR_UNKNOWN;
-            }
+        case 'o':
+            arguments->osp = 1;
             break;
         case ARGP_KEY_ARG:
         case ARGP_KEY_END:
@@ -120,63 +82,8 @@ static void force_osp(io_t *serial, char *dev)
     if (!err) (err = (serial->close(serial)));
 }
 
-static void poll_eph(osp_t *osp, char *filename)
-{
-    int count;
-    ephemeris_t eph[12];
-    execf(count = osp_ephemeris_poll(osp, 0, eph) < 0);
-    FILE *f = fopen(filename, "wb");
-    fwrite(eph, sizeof(ephemeris_t), count, f);
-    fclose(f);
-}
-
-static void poll_almanac(osp_t *osp, char *filename)
-{
-    almanac_t almanac;
-    execf(osp_almanac_poll(osp, &almanac));
-    FILE *f = fopen(filename, "wb");
-    fwrite(&almanac, sizeof(almanac_t), 1, f);
-    fclose(f);
-}
-
-static void set_eph(osp_t *osp, char *filename)
-{
-    ephemeris_t eph[12];
-    int count;
-    memset(eph, 0, sizeof(eph));
-    FILE *f = fopen(filename, "rb");
-    count = fread(eph, sizeof(ephemeris_t), 12, f);
-    fclose(f);
-    while(count--) {
-        execf(osp_ephemeris_set(osp, eph));
-    }
-}
-
-static void set_almanac(osp_t *osp, char *filename)
-{
-    almanac_t almanac;
-    FILE *f = fopen(filename, "rb");
-    fread(&almanac, sizeof(almanac_t), 1, f);
-    fclose(f);
-    execf(osp_almanac_set(osp, &almanac));
-}
-
-static int terminate = 0;
-
-static void sig_handler(int signum)
-{
-    terminate = 1;
-}
-
 static void sig_ignore(int signum)
 {
-}
-
-void location_cb(void *arg, int svs, int32_t lat, int32_t lon, time_t time)
-{
-    if (svs >= 3 && *(int*)arg) {
-        terminate = 1;
-    }
 }
 
 int main(int argc, char* argv[])
@@ -186,12 +93,9 @@ int main(int argc, char* argv[])
     struct arguments arguments;
     memset(&arguments, 0, sizeof(arguments));
     arguments.device = "/dev/ttyUSB0";
-    arguments.almanac = "almanac.bin";
-    arguments.eph = "eph.bin";
 
     openlog(NULL, LOG_CONS | LOG_NDELAY, LOG_USER | LOG_LOCAL0);
 
-    signal(SIGINT, sig_handler);
     signal(SIGUSR1, sig_ignore);
 
     argp_parse(&argp, argc, argv, 0, NULL, &arguments);
@@ -200,65 +104,45 @@ int main(int argc, char* argv[])
     io_t *transport = osp_transport_alloc(serial);
     driver_t *driver = driver_alloc(transport);
     osp_t *osp;
+    osp = osp_alloc(driver, NULL, NULL);
 
-    if (!arguments.measure) {
-        osp = osp_alloc(driver, NULL, NULL);
-    } else {
-        cbs.location = location_cb;
-        osp = osp_alloc(driver, &cbs, &initialized);
-    }
-
-    if (arguments.force)
+    if (arguments.osp)
         force_osp(serial, arguments.device);
 
     serial_config(serial, arguments.device, B115200);
- 
     osp_start(osp);
-
-    /* wait for osp running */
     usleep(10*1000);
+
     if (arguments.factory) {
-            execf(osp_factory(osp, false, false));
+        execf(osp_factory(osp, false, false));
     } else {
-        if (arguments.seed) {
-            osp_position_t seed = {
-                .lat = arguments.lat,
-                .lon = arguments.lon,
-                .alt = arguments.alt,
-                .err_h = 0,
-                .err_v = 0,
-            };        
-
-            execf(osp_init(osp, true, &seed, arguments.drift));
-        } else {
-            execf(osp_init(osp, false, NULL, 0));
+        if (!arguments.noinit) {
+            execf(osp_init(osp, true, NULL, 0));
+            execf(osp_wait_for_ready(osp));
+            sleep(1); /* Wait for HW request. (FIXME) */
+            execf(osp_open_session(osp, false));
         }
 
-        sleep(1); 
-
-        execf(osp_open_session(osp, false));
-
-        if (arguments.upload) {
-            set_almanac(osp, arguments.almanac);
-            set_eph(osp, arguments.eph);
+        if (arguments.version) {
+            char version[80];
+            int rv;
+            execf((rv = osp_version(osp, version)));
+            if (!rv) printf("Version: %s\n", version);
         }
 
-        if (arguments.download) {
-            poll_almanac(osp, arguments.almanac);
-            poll_eph(osp, arguments.eph);
+        if (arguments.listen) {
+            printf("Keep listening. Press any key to exit\n");
+            getchar();
         }
-        
-        if (arguments.listen || arguments.measure) {
-            initialized = 1;
-            for(;!terminate;)
-                usleep(100*1000);
+
+        if (!arguments.noinit) {
+            execf(osp_close_session(osp, false));
         }
     }
 
-    execf(osp_close_session(osp, false));
-
     osp_stop(osp);
     free(osp);
+    free(driver);
     free(transport);
     free(serial);
     closelog();
