@@ -72,6 +72,11 @@ msg_begin(4) {
     } channel[12];
 } msg_end;
 
+/* Software version String (Response to Poll) - MID6 (0x06) */
+msg_begin(6) {
+    char version[80];
+} msg_end;
+
 /* Clock Status Data - MID7 (0x07) */
 msg_begin(7) {
     uint16_t extended_gps_week;
@@ -94,6 +99,16 @@ msg_begin(11) {
 msg_begin(12) {
     uint8_t sid;
     uint8_t nacid;
+} msg_end;
+
+/* Visible list = MID 13 (0x0D) */
+msg_begin(13) {
+    uint8_t svs;
+    struct {
+        uint8_t svid;
+        int16_t azimuth;
+        int16_t elevation;
+    } ch[13];
 } msg_end;
 
 /* Almanac Data - MID 14 (0x0E) */
@@ -199,6 +214,17 @@ msg_begin(41) {
 msg_begin(56) {
     uint8_t sid;
     union {
+        /* Ephemeris status response*/
+        struct {
+            struct {
+                uint8_t svid;
+                uint8_t source;
+                uint16_t week;
+                uint16_t toe;
+                uint8_t integrity;
+                uint8_t age;
+            } eph[12];
+        } sid3;
         /* Verified 50 bps Broadcast Ephemeris and Iono Data */
         struct {
             uint8_t channel;
@@ -339,6 +365,12 @@ msg_begin(130) {
     struct almanac_row rows[32];
 } msg_end;
 
+/* Poll software version - MID 132 (0x84) */
+msg_begin(132)
+{
+    uint8_t reserved;
+} msg_end;
+
 /* Set protocol - MID135 (0x87) */
 enum mid135_protocol {
     P_NULL,
@@ -368,7 +400,7 @@ msg_begin(147) {
 
 /* Set Ephemeris - MID149 (0x95) */
 msg_begin(149) {
-    uint16_t data[3][15];
+    uint16_t data[45];
 } msg_end;
 
 /* Set TricklePower Parameters - MID151 (0x97) */
@@ -384,6 +416,16 @@ msg_begin(166) {
     uint8_t mid_to_set;
     uint8_t update_rate;
     uint8_t reserved[4];
+} msg_end;
+
+/* Ephemeries Status Request - MID212 (0xD4) */
+enum mid212_sid {
+    MID212_EPH_REQUEST = 1,
+    MID212_ALMANAC_REQUEST = 2
+};
+
+msg_begin(212) {
+    uint8_t sid;
 } msg_end;
 
 /* Session Opening/Closing Request - MID213 (0xD5) */
@@ -446,6 +488,14 @@ msg_begin(215) {
             uint8_t time_accuracy;
         } sid2;
     };
+} msg_end;
+
+/* Reject - MID216 */
+msg_begin(216) {
+    uint8_t sid;
+    uint8_t rmid;
+    uint8_t rsid;
+    uint8_t reason;
 } msg_end;
 
 /* Power Mode Request - MID218 (0xDA) */
@@ -511,42 +561,21 @@ msg_begin(220) {
     uint8_t cw_mode;
 } msg_end;
 
-union osp_message {
-    struct mid2 mid2;
-    struct mid11 mid11;
-    struct mid12 mid12;
-    struct mid14 mid14;
-    struct mid15 mid15;
-    struct mid18 mid18;
-    struct mid41 mid41;
-    struct mid56 mid56;
-    struct mid73 mid73;
-    struct mid74 mid74;
-    struct mid90 mid90;
-    struct mid128 mid128;
-    struct mid130 mid130;
-    struct mid135 mid135;
-    struct mid146 mid146;
-    struct mid147 mid147;
-    struct mid149 mid149;
-    struct mid151 mid151;
-    struct mid166 mid166;
-    struct mid213 mid213;
-    struct mid214 mid214;
-    struct mid215 mid215;
-    struct mid218 mid218;
-    uint8_t reserved[256]; /* remove it */
+msg_begin(232) {
+    uint8_t sid;
+    uint32_t svid_mask;
 } msg_end;
-typedef union osp_message osp_message_t;
 
 struct osp_frame {
     uint8_t mid;
     union {
         struct mid2 mid2;
         struct mid4 mid4;
+        struct mid6 mid6;
         struct mid7 mid7;
         struct mid11 mid11;
         struct mid12 mid12;
+        struct mid13 mid13;
         struct mid14 mid14;
         struct mid15 mid15;
         struct mid18 mid18;
@@ -560,17 +589,21 @@ struct osp_frame {
         struct mid90 mid90;
         struct mid128 mid128;
         struct mid130 mid130;
+        struct mid132 mid132;
         struct mid135 mid135;
         struct mid146 mid146;
         struct mid147 mid147;
         struct mid149 mid149;
         struct mid151 mid151;
         struct mid166 mid166;
+        struct mid212 mid212;
         struct mid213 mid213;
         struct mid214 mid214;
         struct mid215 mid215;
+        struct mid216 mid216;
         struct mid218 mid218;
         struct mid220 mid220;
+        struct mid232 mid232;
         uint8_t reserved[256]; /* remove it */
     };
 } msg_end;
