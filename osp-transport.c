@@ -80,7 +80,7 @@ static int m_read(io_t *io, void *buffer, size_t size)
     uint16_t tail;
     osp_transport_t *ot = (osp_transport_t*)io;
     io_t *lio = ot->io;
-    
+
     if (!scan_for_header(lio)) {
         if (read_exactly(lio, (uint8_t*)&length, 2) < 0) goto osp_recv_error;
         length = htobe16(length);
